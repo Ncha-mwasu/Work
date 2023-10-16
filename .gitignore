@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+__pycache__/*
+*.py[cod] *$py.class
+
+# txts
+transmitted.txt
+roundprogress.txt
+
+tmp/*
+# pip build dir
+build
+
+*.csv
+*.pickle
+*.svg
+*.png
+*.ipynb
+
+*.bak
+*.gz
+*.pyc
+*.py~
+*.pz~
+
+# Results
+results/*
+
+# Compiled files
+*cpython*.so
+*~lock.*

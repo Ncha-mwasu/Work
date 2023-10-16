@@ -1,0 +1,13 @@
+The process of running it is the same.
+1. The prediction interval is the MARKOV_PREDICTION_INTERVAL in the config file
+2. The time step  is TIME_STEP 
+3. The results is the MeanAbsoluteError.txt and the MeanSquaredError.txt files
+
+How does it do the prediction?
+e.g at interval of 10:
+
+pick data from 0-9 and predict 10-19, then evaluate on actual 10-19
+discard data from 0-9
+pick data from 10-19, and predict 20-29 then evaluate on actual 20-29
+discard data from 20-29
+...................
