@@ -209,8 +209,9 @@ class Network(list):
                 tracer['alive_nodes'][2].append(nb_alive_nodes)
                 if cf.TRACE_ENERGY:
                     tracer['energies'][2].append(self.get_remaining_energy())
-
+                    
                 self.routing_protocol.setup_phase(self, round_nb)
+                
                 with open('roundprogress.txt', 'a') as f:
                     f.write(str(len(self.get_alive_nodes()[:-2]))+ '\n')
                 # check if someone died
@@ -505,6 +506,7 @@ class Network(list):
         else:
             self._recursive_comm(next_alive_nodes)
     cnt = 0
+    
     def _two_level_comm(self, alive_nodes):
         
         """This method performs communication supposing that there are only
@@ -666,6 +668,7 @@ class Network(list):
                     if node == nodez:
                         destination = node.network_handler[node.next_hop]
                         distance = node.distance_to_endpoint
+                        
                         if(time.time()-t0 <= cf.TIME_SLOT):
                             node.transmit(destination=destination)
                             if distance<=cf.DISTANCE_THRESH:
