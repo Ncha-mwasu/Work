@@ -97,8 +97,8 @@ def run_scenarios(kwargs):
             assert inspect.isclass(sleep_scheduler_class), not_class_msg
             network.sleep_scheduler_class = sleep_scheduler_class
 
-        aggregation_function = aggregation + '_cost_aggregation'
-        network.set_aggregation_function(eval(aggregation_function))
+            aggregation_function = aggregation + '_cost_aggregation'
+            network.set_aggregation_function(eval(aggregation_function))
 
         logging.info(scenario_name + ': running scenario...')
         try:
