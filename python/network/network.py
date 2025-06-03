@@ -5,57 +5,81 @@ import time
 import uuid
 from datetime import datetime
 from multiprocessing.dummy import Pool as ThreadPool
-
 import matplotlib.pyplot as plt
 import numpy as np
 from apscheduler.schedulers.background import BackgroundScheduler
 from numpy.core.fromnumeric import trace
 from sklearn.metrics import mean_absolute_error
-
 import config as cf
 from python.network.node import Controller, Node
 from python.network.sleepscheduler import SleepScheduler
-#from python.sleep_scheduling.sleep_scheduler import *
 from python.utils.grid import *
 from python.utils.tracer import *
 from python.utils.utils import calculate_distance, get_result_path
-
-"""
-Consolidating errors
-"""
-
 from collections import OrderedDict
-
 import errors_consolidate.errors_consolidator as ec
+from pyof.v0x01.controller2switch.features_request import FeaturesRequest
+import networkx as nx
 
-"""
-Consolidating errors
-"""
 
+
+class OpenFlowController:
+    def __init__(self, network):
+        self.network = network
+        self.node_ips = cf.NODE_IPS
+        self.controller_ips = cf.CONTROLLER_IPS
+        self.topology = {}
+
+    def update_topology(self):
+        for node in self.network:
+            neighbors = []
+            for other in self.network:
+                if node != other and calculate_distance(node, other) <= cf.TX_RANGE:
+                    neighbors.append(other.ip)
+            self.topology[node.ip] = neighbors
+
+    def handle_packet_in(self, node, dst_ip, msg_length):
+        src_ip = node.ip
+        next_hop_ip = self.get_next_hop(node, dst_ip)
+        node.add_flow_rule(dst_ip, next_hop_ip)
+        next_hop = self.network.get_node_by_ip(next_hop_ip)
+        if next_hop and calculate_distance(node, next_hop) <= cf.TX_RANGE:
+            node.energy_source.consume(cf.E_TRANSMITTING * msg_length)
+            next_hop.receive(msg_length)
+        else:
+            self.network.packetloss.append(1)
+
+    def get_next_hop(self, node, dst_ip):
+        if dst_ip in self.controller_ips.values():
+            return dst_ip
+        if node.is_head():
+            return self.controller_ips[cf.BSID]
+        return self.node_ips.get(node.next_hop, self.controller_ips[cf.BSID])
 
 class Network(list):
     """This class stores a list with all network nodes plus the base sta-
     tion. Its methods ensure the network behavior.
     """
-    
-    def __init__(self, cont_nodes=None, sensor_nodes =None):
+    SUBNET = "192.168.1"
+    LEASE_TIME = 86400  # 24 hours in seconds
+    CONTROLLER_PORT = 88
+        
+    def __init__(self, cont_nodes=None, sensor_nodes=None):
         logging.debug('Instantiating nodes...')
-        self.controller_list = cont_nodes
+        self.controller_list = cont_nodes or []
+        self.controller = OpenFlowController(self)
         if sensor_nodes:
-           self.extend(sensor_nodes)
-        
-        if cont_nodes:
-           nodes = [Node(i, self) for i in range(0, cf.NB_NODES)]
-           self.extend(nodes)
-           self.extend(cont_nodes)
-           base_station = Node(cf.BSID, self)
-           base_station.pos_x = cf.BS_POS_X
-           base_station.pos_y = cf.BS_POS_Y
-           self.append(base_station)
+            self.extend(sensor_nodes)
+        else:
+            nodes = [Node(i, self, ip=cf.NODE_IPS[i]) for i in range(cf.NB_NODES)]  # Creates 100 nodes
+            self.extend(nodes)
+            if cont_nodes:
+                self.extend(cont_nodes)
+            base_station = Node(cf.BSID, self, ip=cf.CONTROLLER_IPS[cf.BSID])
+            base_station.pos_x = cf.BS_POS_X
+            base_station.pos_y = cf.BS_POS_Y
+            self.append(base_station)
            
-            # last node in nodes is the super controller/base station
-            #include sub-controllers and append them to the
-        
         self.death_list=[]
         self._dict = {}
         for node in self:
@@ -74,10 +98,7 @@ class Network(list):
         self.energy_spent = []
         self.packetloss = []
         self.scenario = []
-        """
-        Consolidating errors
-        """
-        
+           
         self.mse = []
         self.mae = []
         self.delay=[]
@@ -85,29 +106,41 @@ class Network(list):
         Network.remaining_energies_path = os.path.join(get_result_path(), 'remaining_energies')
         Network.round_energies_result_csv = {}
         Network.round_energies_result_csv_writers = {}
-        x = [node for node in self if isinstance(node, Controller)== False]
+        x = [node for node in self if not isinstance(node, Controller)]
         x = [node for node in x if node.alive]
         x = [node for node in x if node.id != cf.BSID]
-        Network.all_ordinary_nodes = [node for node in x if node.is_head() == False]
         
-        Network.actual_rows = {}
-        Network.predicted_rows = {}
-        for node in Network.all_ordinary_nodes:
-            Network.actual_rows[f'node_{node.id}'] = []
-            Network.predicted_rows[f'node_{node.id}'] = []
-
-        """
-        Consolidating errors
-        """
+        Network.all_ordinary_nodes = [node for node in x if not node.is_head()]
+        Network.actual_rows = {f'node_{node.id}': [] for node in Network.all_ordinary_nodes}
+        Network.predicted_rows = {f'node_{node.id}': [] for node in Network.all_ordinary_nodes}
 
         self.pack = 0
         self.mse = []
         self.markov_energies = 0
         
         self.sched = BackgroundScheduler()
-        self.sched.add_job(self.logger, 'interval', seconds=cf.TIME_STEP)
-        self.sched.start()
+        #self.sched.add_job(self.logger, 'interval', seconds=cf.TIME_STEP, max_instances=1)
+        #self.sched.start()
         self.logger()
+        
+        
+    def get_node_by_ip(self, ip):
+        for node in self:
+            if node.ip == ip:
+                return node
+        return None
+
+    def update_flow_tables(self):
+        self.controller.update_topology()
+        for node in self.get_ordinary_nodes():
+            dst_ip = cf.CONTROLLER_IPS[cf.BSID]
+            next_hop_ip = cf.NODE_IPS.get(node.next_hop, cf.CONTROLLER_IPS.get(node.next_hop, cf.CONTROLLER_IPS[cf.BSID]))
+            node.add_flow_rule(dst_ip, next_hop_ip)
+        for node in self.get_heads():
+            node.add_flow_rule(cf.CONTROLLER_IPS[cf.BSID], cf.CONTROLLER_IPS[cf.BSID])
+        for controller in self.get_controllers():
+            controller.add_flow_rule(cf.CONTROLLER_IPS[cf.BSID], cf.CONTROLLER_IPS[cf.BSID])
+
 
     def logger(self):
         for node in self.get_ordinary_nodes():
@@ -253,13 +286,11 @@ class Network(list):
         '''
 
         #this_ten = cf.MARKOV_PREDICTION_INTERVAL
-        this_error_mae = np.mean(self.mae)
-        this_error_mse = np.mean(self.mse)
+        # this_error_mae = np.mean(self.mae)
+        # this_error_mse = np.mean(self.mse)
 
-       # this_errors_string = f'"{this_ten}p{this_ten}": {{"markov": {{"mae": {this_error_mae}, "mse": {this_error_mse} }}}},\n' if this_ten + 12 < cf.ARIMA_END else f'"{this_ten}p{this_ten}": {{"markov": {{"mae": {this_error_mae}, "mse": {this_error_mse} }}}}\n'
-
-        with open('errors_consolidate_parallel.txt', 'a') as f: 
-            f.write(this_error_mse)
+        # with open('errors_consolidate_parallel.txt', 'a') as f: 
+        #     f.write(this_error_mse)
         '''
         Consolidating Errors
         '''
@@ -302,28 +333,16 @@ class Network(list):
             # node_ids.append(str(node.id))
             nodes[i] = node
             i = i + 1
-        cost1 = np.mean(self.mse) 
-        with open('cost.txt', 'a+') as f:
-            f.write(str(cost1)+'\n')
-        cost2 = np.mean(self.mae)
-        with open('cost2.txt', 'a+') as f:
-            f.write(str(cost2)+'\n')
+        # #cost1 = np.mean(self.mse) 
+        # with open('cost.txt', 'a+') as f:
+        #     f.write(str(cost1)+'\n')
+        # #cost2 = np.mean(self.mae)
+        # with open('cost2.txt', 'a+') as f:
+        #     f.write(str(cost2)+'\n')
 
-        self.sched.shutdown()
+        #self.sched.shutdown()
         
         return tracer, timer_logs #before optimization
-        # return np.mean(self.mse) + np.array([node.markov_energy for node in self.get_ordinary_nodes()]).mean()
-
-    
-   # def packet_loss_plot(self):
-        
-      #  plt.plot(range(0, cf.MAX_ROUNDS), self.packetloss, 'r', label=self.scenario)
-      #  plt.xlabel('Number of rounds')
-     #   plt.ylabel('Average Packet Loss')
-      #  plt.legend(fontsize=11)
-      #  plt.show()
-
-        
 
     def get_packet_loss(self):
         return self.packetloss
@@ -342,115 +361,77 @@ class Network(list):
             self._communication_phase()
             self.delay.append((time.time()-t0))
                     # total_transmitted_per_round_to_CH = {}
-            total_transmitted_per_round_to_CH = {}
-            total_received_per_round_per_CH ={}
+        #     total_transmitted_per_round_to_CH = {}
+        #     total_received_per_round_per_CH ={}
 
-            for node in self.get_ordinary_nodes():
-        # print(node.next_hop)
-                total_transmitted_per_round_to_CH['cluster_head_id '+str(node.next_hop)] = 0
+        #     for node in self.get_ordinary_nodes():
+        # # print(node.next_hop)
+        #         total_transmitted_per_round_to_CH['cluster_head_id '+str(node.next_hop)] = 0
                     
-            for node in self.get_ordinary_nodes():
-                # node.transmit()
-                total_transmitted_per_round_to_CH['cluster_head_id '+str(node.next_hop)] += node.amount_transmitted
+        #     for node in self.get_ordinary_nodes():
+        #         # node.transmit()
+        #         total_transmitted_per_round_to_CH['cluster_head_id '+str(node.next_hop)] += node.amount_transmitted
     
-            with open('transmitted.txt', 'a') as f:
-                    f.write(str(total_transmitted_per_round_to_CH)+'\n')
+        #     with open('transmitted.txt', 'a') as f:
+        #             f.write(str(total_transmitted_per_round_to_CH)+'\n')
 
-            # for node in self.get_ordinary_nodes():    
-            #     for nde in self:
-            #         if nde.id == node.network_handler[node.next_hop].id:
-            #         #  print('------------')
-            #         # print(nde.amount_received)
-            #             total_received_per_round_per_CH ['cluster_head_id '+str(node.next_hop)] = nde.packet_received
-            #             #print(total_received_per_round_per_CH)
-            #             nde.transmit()
-            for node in self.get_heads():
-                total_received_per_round_per_CH ['cluster_head_id '+str(node.id)] = 0
+        #     for node in self.get_heads():
+        #         total_received_per_round_per_CH ['cluster_head_id '+str(node.id)] = 0
                 
-            for node in self.get_heads():
-                total_received_per_round_per_CH ['cluster_head_id '+str(node.id)] += node.packet_received
-                node.transmit()
+        #     for node in self.get_heads():
+        #         total_received_per_round_per_CH ['cluster_head_id '+str(node.id)] += node.packet_received
+        #         node.transmit()
 
-                #node._aggregate()
-            #print(total_received_per_round_per_CH)       
-            packet_loss_per_round_cluster = {}
-            self.packet_loss_total = 0
-            self.pack = 0
-            packetloss_head = []
-            self.number_of_CH = len(total_received_per_round_per_CH.keys())
-            for head in total_received_per_round_per_CH.keys():
-                for node in total_transmitted_per_round_to_CH.keys():
-                    if head == node:
-                        packet_loss =  total_transmitted_per_round_to_CH[head] - total_received_per_round_per_CH[head] 
-                        # print(total_transmitted_per_round_to_CH[head],total_received_per_round_per_CH[head])
-                        packet_loss_per_round_cluster[head] = packet_loss
-                        # with open('packetlosses.txt', 'a') as f:
-                        #     f.write('average packet loss for round '+str(round)+' '+ ' packet_loss_total '+str(packet_loss)'\n')
+        #         #node._aggregate()
+        #     #print(total_received_per_round_per_CH)       
+        #     packet_loss_per_round_cluster = {}
+        #     self.packet_loss_total = 0
+        #     self.pack = 0
+        #     packetloss_head = []
+        #     self.number_of_CH = len(total_received_per_round_per_CH.keys())
+        #     for head in total_received_per_round_per_CH.keys():
+        #         for node in total_transmitted_per_round_to_CH.keys():
+        #             if head == node:
+        #                 packet_loss =  total_transmitted_per_round_to_CH[head] - total_received_per_round_per_CH[head] 
+        #                 packet_loss_per_round_cluster[head] = packet_loss
 
-                        self.packet_loss_total += packet_loss
-                        packetloss_head.append(packet_loss)
-            average_heads = np.mean(packetloss_head, axis=0)
-            self.packetloss.append(average_heads)
-             # populate actual and predicted rows for use in csv files
-            for node in Network.all_ordinary_nodes:
-                round_energy = str(node.energy_source.energy)
-                Network.actual_rows[f'node_{node.id}'].append(round_energy)
+        #                 self.packet_loss_total += packet_loss
+        #                 packetloss_head.append(packet_loss)
+        #     average_heads = np.mean(packetloss_head, axis=0)
+        #     self.packetloss.append(average_heads)
+        #      # populate actual and predicted rows for use in csv files
+        #     for node in Network.all_ordinary_nodes:
+        #         round_energy = str(node.energy_source.energy)
+        #         Network.actual_rows[f'node_{node.id}'].append(round_energy)
     
-        # write record (single line) into remaining_energies.csv
-        round_energies = [str(node.energy_source.energy) for node in self.get_ordinary_nodes()]
-        Network.write_round_energies_csv(round_energies)
-        y_truth = []
-        y_predicted = []
-        if  round ==0:
-            with open('MeanSquaredErrors.txt', 'a') as f:
-                    f.truncate(0)
+        # # write record (single line) into remaining_energies.csv
+        # round_energies = [str(node.energy_source.energy) for node in self.get_ordinary_nodes()]
+        # Network.write_round_energies_csv(round_energies)
+        # y_truth = []
+        # y_predicted = []
+        # if  round ==0:
+        #     with open('MeanSquaredErrors.txt', 'a') as f:
+        #             f.truncate(0)
 
             
-            with open('MeanAbsoluteErrors.txt', 'w') as f:
-                    f.truncate(0)
-
-        '''
-        Consolidating Errors
-        '''        
-
-        '''if round >= cf.MARKOV_PREDICTION_INTERVAL:
-            mse_errors_list = []
-            mae_errors_list = []
-            for node in self.get_ordinary_nodes():
-                forecast = node.predicted_remain_energy_list[round%cf.MARKOV_PREDICTION_INTERVAL]
-                actual = node.energy_source.energy
-                mse_errors_list.append(pow(forecast - actual, 2))
-                mae_errors_list.append(np.abs(forecast - actual))
-                y_truth.append(node.energy_source.energy)
-                y_predicted.append(node.predicted_remain_energy_list[round%cf.MARKOV_PREDICTION_INTERVAL])
-            with open('MeanSquaredErrors.txt', 'a') as f:
-                f.write(str(np.mean(mse_errors_list))+'\n')
-                self.mse.append(np.mean(mse_errors_list))
-            with open('MeanAbsoluteErrors.txt', 'a') as f:
-                f.write(str(mean_absolute_error(y_predicted, y_truth))+'\n')
-                self.mae.append(np.mean(mae_errors_list))'''
-
-        '''
-        Consolidating Errors
-        '''
-        
-        for node in self.get_ordinary_nodes():
-            self.markov_energies += node.markov_energy
+        #     with open('MeanAbsoluteErrors.txt', 'w') as f:
+        #             f.truncate(0)
+       
+        # for node in self.get_ordinary_nodes():
+        #     self.markov_energies += node.markov_energy
             
-        self.pack = self.packet_loss_total
-        self.death_list.append(self.deaths_this_round)
-        # For nodes that are asleep, set the current stage as sleeping for tracking
-        for node in self.get_sleeping_nodes():
-            node.set_sleeping_stage()
+        # self.pack = self.packet_loss_total
+        # self.death_list.append(self.deaths_this_round)
+        # # For nodes that are asleep, set the current stage as sleeping for tracking
+        # for node in self.get_sleeping_nodes():
+        #     node.set_sleeping_stage()
 
-        after_energy = self.get_remaining_energy()
-        self.energy_spent.append(before_energy - after_energy)
+        # after_energy = self.get_remaining_energy()
+        # self.energy_spent.append(before_energy - after_energy)
 
-        if round == cf.MAX_ROUNDS-1:
-            self.pack =0 
+        # if round == cf.MAX_ROUNDS-1:
+        #     self.pack =0 
 
-        
-        
 
     def _sensing_phase(self):
         """Every alive node captures information using its sensor."""
@@ -465,11 +446,6 @@ class Network(list):
         messages reach the base station. This method works for any hierar-
         chy (even for LEACH).
         """
-        #ordinary_nodes = self.get_ordinary_nodes()
-        #heads = self.get_ch_nodes()
-        #msg = str("%d ordinary nodes, %d heads." % (len(ordinary_nodes), len(heads)))
-        #logging.debug("Hierarchical communication: %s" % (msg))
-
         alive_nodes = self.get_alive_nodes()
        # print('next hop of alive nodes')
         for i in alive_nodes:
@@ -519,23 +495,10 @@ class Network(list):
         x = [node for node in x if node.next_hop != -3]
         x = [node for node in x if node.next_hop != -4]
         x = [node for node in x if node.id != cf.BSID]
-        #print(x)
        
-        # print(x)
-       # ordinary_nodes =  [node for node in x if  node.is_ordinary()]
+     
         ordinary_nodes = x
-
-        # total_transmitted_per_round_to_CH = {};
-        # total_received_per_round_per_CH ={};
-        #ordinary_nodes = self.get_ordinary_nodes()
-        #print('len of ord nodes ', len(ordinary_nodes))
-
- 
-        # scheduler = SleepScheduler(cluster_nodes= ordinary_nodes)
-
         cluster_ids = set([x.next_hop for x in ordinary_nodes])
-       # print('clusters', cluster_ids)
-
         all_clusters = []
         for i in cluster_ids:
             cluster_nodes = []
@@ -543,197 +506,47 @@ class Network(list):
                 if node.next_hop == i:
                     cluster_nodes.append(node)
             all_clusters.append(cluster_nodes)
-        #scheduler = SleepScheduler(cluster_nodes = cluster_nodes)
-        #print('clusters', str(all_clusters))
-        # for node in ordinary_nodes:
+            
         #DC_ALGORITHM Proposed
-        # for cluster in all_clusters:
-        #     total_available_nodes_in_cluster = 0
-        #     bad_nodes_in_cluster = []
-        #     for node in cluster:
-        #         if node.trackker_from_markov_interval <= round(node.DC * cf.MARKOV_PREDICTION_INTERVAL): # check if node has exceeded its duty cycle for markov interval rounds
-        #             total_available_nodes_in_cluster += 1
-        #         else:
-        #             node.set_sleeping_stage()
-        #             bad_nodes_in_cluster.append(node)
-        #     if total_available_nodes_in_cluster >= round(0.5  * len(cluster)): # confirm if 50% of cluster is available
-        #         [node.set_sleeping_stage() for node in bad_nodes_in_cluster] #make those nodes to rest
-        #         [cluster.remove(node) for node in bad_nodes_in_cluster]
-        #     else:
-        #         while total_available_nodes_in_cluster < round(0.5 * len(cluster)):
-        #             bad_nodes_in_cluster.remove(bad_nodes_in_cluster[0])
-        #             total_available_nodes_in_cluster += 1
-        #         [node.set_sleeping_stage() for node in bad_nodes_in_cluster] #make those nodes to rest
-        #         [cluster.remove(node) for node in bad_nodes_in_cluster]
-                
-        # sleepers = []
-        # for cluster in all_clusters:
-        #     cluster_copy = list(cluster)
-        #     for node in cluster_copy:
-        #         if node.energy_source.energy < (0.75*cf.INITIAL_ENERGY):
-        #             destination = node.network_handler[node.next_hop]
-        #             node.transmit(msg_length = 4, destination=destination)
-        #             node.receive(4)
-                    
-        #             if len(cluster) > 1:
-        #                 if len(cluster) >= round(0.5  * len(cluster)): # confirm if 50% of cluster is available
-        #                     node.set_sleeping_stage() # make those nodes to rest
-        #                     sleepers.append(node)
-        #                     #print('sleepers', str(sleepers))
-        #                     cluster.remove(node)
-        #                 else:
-        #                     node.set_sleeping_stage()
-        #                     cluster.remove(node)
-        #                     cluster.append(sleepers.pop(0))  # add the first node that slept to clusters
-        #                     sleepers.append(node)
-        #             else:
-        #                 if len(sleepers) > 0:
-        #                     cluster.append(sleepers.pop(0))  # add the first node that slept to clusters
-        
-        '''sleepers = []
-        n_alive = 0
-        l_energy = []
-        l_dist = []
-        w = 0
         for cluster in all_clusters:
-            cluster_copy = list(cluster)
-            for node in cluster_copy:
-                destination = node.network_handler[node.next_hop]
-                node.transmit(msg_length=5, destination=destination)
-                node.receive(msg_length=5)
-                
-                if node.energy_source.energy < (0.75*cf.INITIAL_ENERGY):
-                    node.set_sleeping_stage()
-                    cluster.remove(node)
-                    sleepers.append(node)
-                    n_alive -= 1
-                else:
-                    node.w_dist = sum([calculate_distance(node, next_node)**2 for next_node in cluster])
-                    n_alive += 1
-            
-            l_energy.__add__(cluster)
-                    
-        k = (n_alive - len(sleepers)) * 0.05
-        # sort energy level of alive nodes in ascending order
-        l_energy.sort(key=lambda node: node.energy_source.energy)
-        # sort energy level of alive nodes in ascending order
-        l_dist = list(l_energy)
-        l_dist.sort(key=lambda node: node.w_dist, reverse=True)
-        
-        for i in range(0, len(l_energy)):
-            # give nodes sequential weights from 1 up to the highest node
-            l_energy[i].w_energy = i+1
-            l_dist[i].w_dist = i+1 
-        w = sum([node.energy_source.energy + node.w_dist for node in l_dist])'''
-        
-        for cluster in all_clusters:
-            # def num_of_awake_nodes():
-            #         return sum([1 for node in cluster if not node.is_sleeping])
-            
+            total_available_nodes_in_cluster = 0
+            bad_nodes_in_cluster = []
             for node in cluster:
-                destination = node.network_handler[node.next_hop]
-                # node.transmit(msg_length=5, destination=destination)
-                # node.receive(msg_length=5)
-                if node.temp_list[-1] < cf.DCCHP_THRESH:
-                    node.is_sleeping_stage=True
+                if node.trackker_from_markov_interval <= round(node.DC * cf.MARKOV_PREDICTION_INTERVAL): # check if node has exceeded its duty cycle for markov interval rounds
+                    total_available_nodes_in_cluster += 1
+                else:
                     node.set_sleeping_stage()
-                if node.is_head:
-                     node.is_sleeping = False
-                     node.set_waking_stage()
-                    
-                # if node.is_sleeping:
-                #     destination = node.network_handler[node.next_hop]
-                #     node.transmit(msg_length=5, destination=destination)
-                #     node.receive(msg_length=5)
+                    bad_nodes_in_cluster.append(node)
+            if total_available_nodes_in_cluster >= round(0.5  * len(cluster)): # confirm if 50% of cluster is available
+                [node.set_sleeping_stage() for node in bad_nodes_in_cluster] #make those nodes to rest
+                [cluster.remove(node) for node in bad_nodes_in_cluster]
+            else:
+                while total_available_nodes_in_cluster < round(0.5 * len(cluster)):
+                    bad_nodes_in_cluster.remove(bad_nodes_in_cluster[0])
+                    total_available_nodes_in_cluster += 1
+                [node.set_sleeping_stage() for node in bad_nodes_in_cluster] #make those nodes to rest
+                [cluster.remove(node) for node in bad_nodes_in_cluster]
                 
-                # if node.energy_source.energy < (0.75*cf.INITIAL_ENERGY):
-                #     node.is_sleeping_stage=True
-                #     node.set_sleeping_stage()
-                # elif node.node_stage == node.Stage.SLEEPING and num_of_awake_nodes < cf.MIN_AWAKE_NODE:
-                #     node.is_sleeping = False
-                #     node.set_waking_stage()
-                
-        #try: 
-            #ordinary_nodes[0].transmit()
-        #except:
-           # pass
-
         t0 = time.time()
         for cluster in all_clusters:
-            scheduler = SleepScheduler(cluster_nodes = cluster)
+            scheduler = BackgroundScheduler(cluster_nodes = cluster)
             #print('nodeID', cluster)
             for node in cluster:
                     #self._sensing_phase()
-                    nodez = scheduler.get_next_to_transmit()
-                    if node == nodez:
+                    #nodez = scheduler.get_next_to_transmit()
+                    #if node == nodez:
                         destination = node.network_handler[node.next_hop]
                         distance = node.distance_to_endpoint
                         
                         if(time.time()-t0 <= cf.TIME_SLOT):
-                            node.transmit(destination=destination)
+                            node.transmit(destination=destination, msg_length=512)
                             if distance<=cf.DISTANCE_THRESH:
-                                destination.receive(cf.MSG_LENGTH) 
+                                destination.receive(cf.MSG_LENGTH)
+                                #node.receive(1024)
                         else:
                             break
                         node.set_idle_stage()
-        
-        '''for cluster in all_clusters:
-            for node in cluster:
-                    key_node = scheduler.get_next_to_transmit()                
-                    while(time.time()-self.current_time <= cf.TIME_SLOT): 
-                        key_node.transmit()
-                    key_node.set_idle_stage()'''
-
-        # for node in ordinary_nodes:
-        #     total_transmitted_per_round_to_CH['cluster_head_id '+str(node.next_hop)] += node.amount_transmitted
    
-        # with open('transmitted.txt', 'a') as f:
-        #         f.write(str(total_transmitted_per_round_to_CH)+'\n')
-
-        # for node in self.get_ordinary_nodes():    
-        #     for nde in self:
-        #         if nde.id == node.network_handler[node.next_hop].id:
-        #             total_received_per_round_per_CH ['cluster_head_id '+str(node.next_hop)] = nde.packet_received
-        #             nde.transmit()
-            
-        # with open('received.txt', 'a') as f:
-        #         f.write(str(total_received_per_round_per_CH)+'\n')        
-        # packet_loss_per_round_cluster = {};
-        # packet_loss_total = 0
-
-        # number_of_CH = len(total_received_per_round_per_CH.keys())
-        # for head in total_received_per_round_per_CH.keys():
-        #     for node in total_transmitted_per_round_to_CH.keys():
-        #         if head == node:
-        #            packet_loss =  total_transmitted_per_round_to_CH[head] - total_received_per_round_per_CH[head] 
-        #            #print('cluster ' +str(head)+' packet loss '+str(packet_loss))
-        #            packet_loss_per_round_cluster[head] = packet_loss
-        #            packet_loss_total +=packet_loss
-        # if self.cnt == 0:
-        #    with open('packetloss.txt', 'a') as f:
-        #         f.write('average packet loss for round '+str(self.cnt)+' '+str(packet_loss_total/number_of_CH)+'\n')
-        #         self.packetloss.append(packet_loss_total/number_of_CH)
-        # else:
-        #     with open('packetloss.txt', 'a') as f:
-        #         f.write('average packet loss for round '+str(self.cnt)+' '+str((packet_loss_total-self.former_total_packet)/number_of_CH)+'\n')
-        #         self.packetloss.append((packet_loss_total-self.former_total_packet)/number_of_CH)
-        
-        
-        # #with open('packetloss.txt', 'a') as f:
-        #  #       f.write(str(packet_loss_per_round_cluster)+'\n')
-        
-        # self.former_total_packet = packet_loss
-        # self.cnt+=1
-
-    
-    '''def calculate_distance(node1, node2):
-        """Calculate the Euclidean distance between two nodes."""
-        x1 = node1.pos_x
-        y1 = node1.pos_y
-        x2 = node2.pos_x
-        y2 = node2.pos_y
-        return calculate_distance_point(x1, y1, x2, y2)'''
-    
     def get_alive_nodes(self):
         """Return nodes that have positive remaining energy."""
         #re-write to reflect sub-controllers.
@@ -759,8 +572,6 @@ class Network(list):
         x = [node for node in x if node.id != cf.BSID]
         return [node for node in x if node.is_head()== False]
 
-
-
     def get_heads(self, only_alives=1):
         input_set = self.get_alive_nodes() if only_alives else self
         #return [node for node in input_set if node.is_head()]
@@ -771,8 +582,8 @@ class Network(list):
         """Return all nodes except base station."""
         return [node for node in self[0:-1]]
 
-    def get_average_energy(self):
-        return np.average(self.energy_spent)
+    # def get_average_energy(self):
+    #     return np.average(self.energy_spent)
 
     def someone_alive(self):
         """Finds if there is at least one node alive. It excludes the base station,
@@ -888,3 +699,51 @@ class Network(list):
    
     def get_controllers(self):
         return self.controller_list
+    
+    
+    def plot_network(self, filename="network_plot.png", show=False):
+        """Plots the network using NetworkX, showing nodes and communication links."""
+        G = nx.DiGraph()
+        
+        # Add nodes with positions and roles
+        pos = {}
+        node_colors = []
+        labels = {}
+        for node in self:
+            G.add_node(node.id)
+            pos[node.id] = (node.pos_x, node.pos_y)
+            labels[node.id] = f"{node.id} ({node.ip})"
+            if node.id == cf.BSID:
+                node_colors.append('red')  # Base station
+            elif isinstance(node, Controller):
+                node_colors.append('green')  # Controllers
+            elif node.is_head():
+                node_colors.append('yellow')  # Cluster heads
+            else:
+                node_colors.append('blue')  # Ordinary nodes
+        
+        # Add edges based on next_hop or flow_table, within TX_RANGE
+        for node in self:
+            if not node.alive or node.id == cf.BSID:
+                continue
+            if cf.USE_FLOW_TABLE:
+                for dst_ip, next_hop_ip in node.flow_table.items():
+                    next_hop_node = self.get_node_by_ip(next_hop_ip)
+                    if next_hop_node and calculate_distance(node, next_hop_node) <= cf.TX_RANGE:
+                        G.add_edge(node.id, next_hop_node.id)
+            else:
+                next_hop_node = self._dict.get(node.next_hop)
+                if next_hop_node and calculate_distance(node, next_hop_node) <= cf.TX_RANGE:
+                    G.add_edge(node.id, next_hop_node.id)
+        
+        # Plot the graph
+        plt.figure(figsize=(10, 10))
+        nx.draw(G, pos, with_labels=True, labels=labels, node_color=node_colors, 
+                node_size=500, font_size=8, arrows=True, edge_color='gray')
+        plt.title(f"Network Topology (Round {self.round})")
+        
+        # Save and optionally show
+        plt.savefig(os.path.join(get_result_path(), filename), bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close()

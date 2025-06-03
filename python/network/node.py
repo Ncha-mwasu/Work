@@ -1,32 +1,29 @@
 import os
 import sys
+
 import time
 from collections import OrderedDict
-
 import numpy as np
 from apscheduler.schedulers.background import BackgroundScheduler
 from matplotlib.pyplot import xcorr
-
 import config as cf
 from python.network.energy_source import *
 from python.utils import markov_model
 from python.utils.timer import Stage, Timer
 from python.utils.utils import *
 from timer4 import SignalManager
-
-
 class NoRunningFilter(logging.Filter):
     def filter(self, record):
         return False
 
-
 class Controller(object):
-    def __init__(self,id,x,y,parent=None):
+    def __init__(self,id, ip, x,y,parent=None):
         self.pos_x = x
         self.pos_y = y
         self.energy_source = PluggedIn(self)
         self.scheduler = BackgroundScheduler
         self.id = id
+        self.ip =  ip
         self.network_handler = parent
         self.alive = 1
         self.flow_table = None
@@ -53,8 +50,6 @@ class Controller(object):
         if not msg_length:
             msg_length = self.tx_queue_size
         msg_length += cf.HEADER_LENGTH
-
-        # If flow table is defined use destination set on flow table
         if self.flow_table:
             destination = self.flow_table[self.id]["destination"]
             distance = self.distance_to_endpoint
@@ -64,8 +59,6 @@ class Controller(object):
         else:
             distance = calculate_distance(self, destination)
 
-        #destination.receive(msg_length,msg_type)
-        # after the message is sent, queue is emptied
         self.tx_queue_size = 0
         self.amount_transmitted += msg_length
 
@@ -77,50 +70,34 @@ class Controller(object):
 
     def _aggregate(self, msg_length):
         logging.debug("node %d aggregating." % (self.id))
-        # number of bits to be sent increase while forwarding messages
         aggregation_cost = self.aggregation_function(msg_length)
         self.tx_queue_size += aggregation_cost        
        
 class Node(object):
-    def __init__(self, id, parent=None):
+    def __init__(self, id, parent=None, ip=None):
         self.pos_x = np.random.uniform(0, cf.AREA_WIDTH)
         self.pos_y = np.random.uniform(0, cf.AREA_LENGTH)
+        self.ip = ip  # Already supports IP assignment
+        self.flow_table = {}
+        self.id = id 
        
-
-        #identify the IDs for sub-controllers and controller and give them infinite energy
         if id == cf.BSID:
             self.energy_source = PluggedIn(self)
         else:
             self.energy_source = Battery(self)
-
         self.id = id
         self.network_handler = parent
-        # A list of all timer events measured and stored
         self.timer_logs = OrderedDict()
-
-        # Variables used for predictions
-        # A list of all transitions from state to state
         self.transitions = []
-        # A list of predicted transitions from state to state
         self.predicted_transitions = []
-        # A list of all energy usage per round in line with transitions
         self.energy_map = []
-        # Predicted energy consumption for all the states transition predicted
         self.predicted_total_energy_consumed = 0
         self.predicted_remain_energy_list = []
-        #self.predicted_energy_consumed = []
-        # the node transition Matrix generated
         transition_matrix = None
         self.scheduler = BackgroundScheduler
         self.cluster_head_times = []
         self.node_stage = Stage.SENSING
-        # self.sched = BackgroundScheduler()
-        # self.sched.add_job(self.log_stage, 'interval', seconds=cf.TIME_STEP)
         my_filter = NoRunningFilter()
-        # logging.getLogger("apscheduler.scheduler").addFilter(my_filter)
-        # logging.getLogger("apscheduler.executors.default").addFilter(my_filter)
-        # self.sche.``
-        # self.sched.start()
         self.log_stage()
         self.reactivate()
         self.markov_energy = 0
@@ -135,10 +112,6 @@ class Node(object):
         self.weight = 0 # sum of weights
         self.temp_table = {}
         self.temp_list = []
-
-
-
-
 
     def __repr__(self):
         if self.is_controller:
@@ -156,41 +129,25 @@ class Node(object):
 
     @property
     def is_controller(self):
-        # A controller has infinite energy but it's not the base station
         return isinstance(self.energy_source, PluggedIn) and self.id != cf.BSID
-    '''
-    @classmethod
-    def new_controller(cls, id, parent):
-        """ Return a controller Node """
-        node = cls(id, parent)
-        node.energy_source = PluggedIn(cls)
-        return node
-    '''
-
+    
     def reactivate(self):
         """Reactivate nodes for next simulation."""
         self.alive = 1
         self.tx_queue_size = 0
-        self._next_hop = cf.BSID#change to reflect subcontrollers
+        self._next_hop = cf.BSID
         self.distance_to_endpoint = 0
         self.amount_sensed = 0
         self.amount_transmitted = 0
         self.amount_received = 0
         self.memership = cf.BSID
-        # Controllers are attached to certain cluster(s) in this case
-        # Controller Nodes which controls flow table creation
-        # and cluster heads
-        # aggregation function determines the cost of forwarding messages
-        # (in number of bits)
         self.aggregation_function = lambda x: 0
         self.time_of_death = cf.INFINITY
         self._is_sleeping = 0
         self.sleep_prob = 0.0
-        # for coverage purposes
         self.neighbors = []
         self.nb_neighbors = -1
         self.exclusive_radius = 0
-        # Flow Tables control communication when enabled
         self.flow_table = None
         self.packet_received =0
         self.node_stage = Stage.SENSING
@@ -199,7 +156,6 @@ class Node(object):
 
     @property
     def next_hop(self):
-        # If Flow Table routing, next hop is obtained from flow table
         if  self.flow_table and self.id != cf.BSID:
             return self.flow_table[self.id]["destination"]
         return self._next_hop
@@ -232,7 +188,6 @@ class Node(object):
                 
                 x = func(self, *args, **kwargs)
                 timer.stop()
-                # print('elapsed time-> ',timer.elapsed_time)
                 self.timer_logs[timer.uuid] = timer
 
             return wrapper
@@ -245,8 +200,6 @@ class Node(object):
         self.node_stage = Stage.SLEEPING
         
         self.log_stage()
-        #self.set_idle_stage()
-        # time.sleep(1)
         pass
 
     #@_record_time(Stage=Stage.IDLE)
@@ -275,9 +228,6 @@ class Node(object):
         return wrapper
 
     def is_head(self):
-        # a head node's destination is set to either a controller  or a Base Station
-        #if self.next_hop == cf.BSID and self.id != cf.BSID and self.alive:
-        #    return 1
         if self.next_hop == cf.SUBCONT0:
             return 1
         elif self.next_hop == cf.SUBCONT1:
@@ -298,30 +248,20 @@ class Node(object):
         self.node_stage = Stage.AGGREGATING
         self.log_stage()
         logging.debug("node %d aggregating." % (self.id))
-        # number of bits to be sent increase while forwarding messages
         aggregation_cost = self.aggregation_function(msg_length)
         self.tx_queue_size += aggregation_cost
-
-        # energy model for aggregation
         energy = cf.E_DA * aggregation_cost
         self.energy_source.consume(cf.E_PROCESSING * self.amount_received * msg_length)
-        #self.energy_source.consume(energy)
+       
 
     @_only_active_nodes
     #@_record_time(Stage=Stage.TRANSMITTING)
-    def transmit(self, msg_length=None, destination=None, msg_type = 0):
-        #if self.node_stage == Stage.AGGREGATING:
-            #self.energy_source.consume(cf.E_PROCESSING_TRANSMITTING)
-        #elif self.node_stage == Stage.IDLE:
-         #   self.energy_source.consume(cf.E_IDLE_TRANSMITTING)
+    def transmit(self, msg_length=None, destination=None, msg_type = 0):   
         self.node_stage = Stage.TRANSMITTING
         self.log_stage()
         logging.debug("node %d transmitting." % (self.id))
         if not msg_length:
             msg_length = self.tx_queue_size
-        msg_length += cf.HEADER_LENGTH
-        msg_length = cf.MSG_LENGTH+cf.HEADER_LENGTH
-
         # If flow table is defined use destination set on flow table
         if self.flow_table:
             destination = self.flow_table[self.id]["destination"]
@@ -339,47 +279,22 @@ class Node(object):
         else:
             energy += cf.E_FS * (distance**2)
         energy *= msg_length
-
-        
         self.amount_transmitted += 1
-           
-        #if msg_length == 0:
-            #self.amount_transmitted += 1
-        #print('transmit time', time_taken)
-        # after the message is sent, queue is emptied
-        #if msg_type == 1:
-            #self.markov_energy += energy
         self.tx_queue_size = 0
-        #print(str(self.id)+' transmitted ->'+str(self.amount_transmitted)+' to '+str(destination.id))
         self.energy_source.consume(cf.E_TRANSMITTING * msg_length)
-        #self.energy_source.consume(energy)
-        # node enters idle state then sleeps
-        #self.set_idle_stage()
-        #self.set_sleeping_stage()
-        #self.set_idle_stage()
-        # self.sense()
-
+       
 
     @_only_active_nodes
     #@_record_time(Stage=Stage.RECEIVING)
     def receive(self, msg_length, msg_type = 0):
         self.node_stage = Stage.RECEIVING
         self.log_stage()
-        logging.debug("node %d receiving." % (self.id))
-       
-        #if msg_type == 0:
-         #   if self.is_head():
-          #      self._aggregate(msg_length - cf.HEADER_LENGTH)
-        # print(str(self.id)+'  received '+str(self.amount_received))
+        logging.debug("node %d receiving." % (self.id))  
         self.amount_received += msg_length
-        #if (self.amount_received == cf.MSG_LENGTH+cf.HEADER_LENGTH): 
         self.packet_received += 1
-        # energy model for receiver
         energy = cf.E_ELEC * msg_length
         self.energy_source.consume(cf.E_RECEIVING * msg_length)
-        #self.energy_source.consume(energy)
-        #self._aggregate()
-
+    
     @_only_active_nodes
     #@_record_time(Stage=Stage.SENSING)
     def sense(self):
@@ -392,13 +307,10 @@ class Node(object):
         self.amount_sensed += cf.MSG_LENGTH
         self.energy_source.consume(cf.SENSING_ENERGY)
         #TEMP
-        # if self.is_head(): 
         self.temp = float("{:.2f}".format(np.random.randint(20, 30) + np.random.random()))
         self.temp_list.append(self.temp)
-        #TEMP
-        # node enters idle state then sleeps
         self.set_idle_stage()
-        #self.set_sleeping_stage()
+       
     
     def set_waking_stage(self):
         self.node_stage = Stage.SENSING
@@ -411,32 +323,17 @@ class Node(object):
 
     def generate_transition_matrix(self):
         self.transition_matrix = markov_model.generate_transition_matrix(self.transitions)
-        
-        # print(self.transitions)
-        # print("Transition Matrix")
-        # print(self.transition_matrix)
-        # energy model for transition matrix generation
-        
-        #self.transmit(destination = self.network_handler[self.next_hop], msg_length=(os.path.getsize('C:/Users/PRAG/Desktop/IMPLEMENTATIONS/sdwsn-new-arima/markov_energy.txt')/8), msg_type = 1)
         self.energy_source.consume(cf.E_PROCESSING)
         self.transmit(destination = self.network_handler[self.next_hop], msg_type = 1)
-        #self.energy_source.consume(cf.E_TRANSMITTING)
         return self.transition_matrix
-
 
     def log_stage(self):
         # print('logged Stage -> ', self.node_stage)
         if not self.node_stage:
             raise "Stage must be defined to measure time"
         timer = Timer(self.id, self.node_stage)
-
-        #if(timer <= cf.TIME_STEP):
         self.transitions.append(self.node_stage)
-            #time.sleep(cf.TIME_STEP)
-        # x = func(self, *args, **kwargs)
         if timer == cf.TIME_STEP:
             timer.stop()
-        # print('elapsed time-> ',timer.elapsed_time)
         self.timer_logs[timer.uuid] = timer
-        # print('TIMER    ',timer.uuid, timer.Stage.name)
-        # QTimer.singleShot(cf.TIME_SLOT, self.log_stage)
+        

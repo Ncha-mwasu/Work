@@ -113,7 +113,7 @@ scenarios = [
     #              'cf.BS_POS_Y=-65.0',
     #              scenario34,
     # scenario14,
-                #scenario14,
+               # scenario14,
     "save_timer_logs2csv(timer_logs)",
     "save2csv_raw(traces)",
     "plot_traces(traces)",
@@ -153,9 +153,9 @@ TRACE_ENERGY = 1
 TRACE_ALIVE_NODES = 1
 TRACE_COVERAGE = 1
 TRACE_LEARNING_CURVE = 1
-TRANS_RATE = 500       # IN bps
+TRANS_RATE = 512       # IN bps
 # Runtime configuration
-MAX_ROUNDS = 2000
+MAX_ROUNDS = 5000
 # number of transmissions of sensed information to cluster heads or to
 # base station (per round)
 MAX_TX_PER_ROUND = 1
@@ -179,6 +179,7 @@ DISTANCE_THRESH = 10
 # Network configurations:
 # number of nodes
 NB_NODES = 100
+BSID = -1
 SUBCONT0 = -3
 SUBCONT1 = -4
 # Set to True if number of clusters should be the same as number of
@@ -190,9 +191,14 @@ NB_CLUSTERS = 0
 COVERAGE_RADIUS = 15  # meters
 # node transmission range
 TX_RANGE = 30  # meters
-BSID = -1
-# All ids for controllers
-CONTROLLER_IDS = [BSID, ]
+
+NODE_IP_BASE = "192.168.1."
+NODE_IPS = {i: f"{NODE_IP_BASE}{i+2}" for i in range(NB_NODES)}
+CONTROLLER_IPS = {
+    BSID: "192.168.1.1",  # Base station
+    SUBCONT0: f"{NODE_IP_BASE}102",  # 192.168.1.102
+    SUBCONT1: f"{NODE_IP_BASE}103"  # 192.168.1.103
+}
 # The number of Controllers
 NB_CONTROLLERS = 2
 TIME_SLOT = 0.0001
@@ -209,7 +215,7 @@ SUB_CON1_POS_Y=50.0
 
 # packet configs
 MSG_LENGTH = 400  # bits 4000
-HEADER_LENGTH = 100  # bits
+HEADER_LENGTH = 112  # bits
 # initial energy at every node's battery
 INITIAL_ENERGY = 2  # Joules
 
@@ -306,8 +312,8 @@ MINUS_INFINITY = float('-inf')
 RESULTS_PATH = './results/'
 once = True
 # α and β are pointers to the parameter that is more important in determining duty cycle 
-ALPHA = 0.7
-BETA = 0.3
+ALPHA = 0.3
+BETA = 0.7
 DC_min = .10
 DC_med = .20
 DC_max	= .50
@@ -315,3 +321,5 @@ Q_min =	9
 Q_max =	22.5
 
 DCCHP_THRESH = 25
+
+CONTROLLER_IP = "192.168.1.1"

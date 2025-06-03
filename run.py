@@ -24,7 +24,7 @@ from python.network.node import Controller
 from python.routing.direct_communication import *
 from python.routing.fcm import *
 from python.routing.leach import *
-from python.routing.mleach import *
+#from python.routing.mleach import *
 from python.routing.mte import *
 from python.utils.tracer import *
 from python.utils.utils import *
@@ -33,16 +33,30 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
 
 def run_scenarios(kwargs):
-    subcontr0 = Controller(cf.SUBCONT0, cf.SUB_CON0_POS_X, cf.SUB_CON0_POS_Y)
-    subcontr1 = Controller(cf.SUBCONT1, cf.SUB_CON1_POS_X, cf.SUB_CON1_POS_Y)
-    
-
+    subcontr0 = Controller(cf.SUBCONT0, cf.CONTROLLER_IPS[cf.SUBCONT0], cf.SUB_CON0_POS_X, cf.SUB_CON0_POS_Y)  # Uses 192.168.1.102
+    subcontr1 = Controller(cf.SUBCONT1, cf.CONTROLLER_IPS[cf.SUBCONT1], cf.SUB_CON1_POS_X, cf.SUB_CON1_POS_Y)  # Uses 192.168.1.103
     network = Network(cont_nodes=[subcontr0, subcontr1])
-
+    
+    
+    # """
+    # network.plot_network(filename="initial_network.png")  # Plot initial state
+    # traces = {}
+    # timer_logs = OrderedDict()
+    # scenario_names = {}
+    # scenarios = cf.scenarios if not kwargs.get("dry_run") else cf.dry_run_scenarios
+    # cf.HETEROGEANOUS = kwargs.get("heterogeanous")
+    # cf.RESULTS_PATH = os.path.join(cf.RESULTS_PATH, time.strftime("%Y-%m-%d"), time.strftime("%H-%M"))
+    # if kwargs.get("initial_energy"):
+    #     cf.INITIAL_ENERGY = kwargs.get("initial_energy")
+    #     cf.HETEROGEANOUS = False
+    # for scenario in scenarios:
+    
+    # """
+    network.plot_network(filename="initial_network.png")
     traces = {}
     timer_logs = OrderedDict()
     remaining_energies = []
-    average_energies = []
+    # average_energies = []
     scenario_names = {}
 
     scenarios = cf.scenarios if not kwargs.get("dry_run") else cf.dry_run_scenarios
@@ -106,12 +120,12 @@ def run_scenarios(kwargs):
 
             print('what type am i dealing with', type(traces[scenario_name]['energies']))
             print(traces[scenario_name]['energies'])
-            remaining_energies.append(600.0 - network.get_remaining_energy())
+            # remaining_energies.append(600.0 - network.get_remaining_energy())
 
         except:
-            average_energies.append(network.get_average_energy())
-            list_packet_losses.append(network.packetloss)
-            total_death.append(network.death_list)
+            # average_energies.append(network.get_average_energy())
+            # list_packet_losses.append(network.packetloss)
+            # total_death.append(network.death_list)
             print("Done Simulating")
             break
 
@@ -159,50 +173,50 @@ def run_scenarios(kwargs):
     #         a.xticks(x_pos, x)
     #     a.legend()
     # a.show()
-    means1 = []
-    mean1 = 0
-    splitedSize = 10
-    b_splited = [network.packetloss[x:x+splitedSize] for x in range(0, len(network.packetloss), splitedSize)]
-    for i in b_splited:
-            mean1 = np.mean(i)
-            means1.append(mean1)
-    with open('average_packetloss2.txt', 'a+') as f:
-                f.write(str(means1) +'\n')
+    # means1 = []
+    # mean1 = 0
+    # splitedSize = 10
+    # b_splited = [network.packetloss[x:x+splitedSize] for x in range(0, len(network.packetloss), splitedSize)]
+    # for i in b_splited:
+    #         mean1 = np.mean(i)
+    #         means1.append(mean1)
+    # with open('average_packetloss2.txt', 'a+') as f:
+    #             f.write(str(means1) +'\n')
     
-    #sum of dead nodes per 100 rounds
-    sums = []
-    sum = 0
-    splitedSize = 10
-    a_splited = [network.death_list[x:x+splitedSize] for x in range(0, len(network.death_list), splitedSize)]
-    #print('*****', len(a_splited))
-    for i in a_splited:
-            sum = np.mean(i)
-            sums.append(sum)
-    with open('average_death_list.txt', 'a+') as f:
-                f.write(str(sums) +'\n')
+    # #sum of dead nodes per 100 rounds
+    # sums = []
+    # sum = 0
+    # splitedSize = 10
+    # a_splited = [network.death_list[x:x+splitedSize] for x in range(0, len(network.death_list), splitedSize)]
+    # #print('*****', len(a_splited))
+    # for i in a_splited:
+    #         sum = np.mean(i)
+    #         sums.append(sum)
+    # with open('average_death_list.txt', 'a+') as f:
+    #             f.write(str(sums) +'\n')
 
-    #energy spent per 1000 rounds
-    sums2 = []
-    sum2 = 0
-    splitedSize = 10
-    a_splited = [network.energy_spent[x:x+splitedSize] for x in range(0, len(network.energy_spent), splitedSize)]
-    #print('*****', len(a_splited))
-    for i in a_splited:
-            sum2 = np.mean(i)
-            sums2.append(sum2)
-    with open('average_energy spent.txt', 'a+') as f:
-                f.write(str(sums2) +'\n')
+    # #energy spent per 1000 rounds
+    # sums2 = []
+    # sum2 = 0
+    # splitedSize = 10
+    # a_splited = [network.energy_spent[x:x+splitedSize] for x in range(0, len(network.energy_spent), splitedSize)]
+    # #print('*****', len(a_splited))
+    # for i in a_splited:
+    #         sum2 = np.mean(i)
+    #         sums2.append(sum2)
+    # with open('average_energy spent.txt', 'a+') as f:
+    #             f.write(str(sums2) +'\n')
 
-    delays = []
-    delay = 0
-    splitedSize = 10
-    a_splited = [network.delay[x:x+splitedSize] for x in range(0, len(network.delay), splitedSize)]
-    #print('*****', len(a_splited))
-    for i in a_splited:
-            delay = np.mean(i)
-            delays.append(delay)
-    with open('average_delay.txt', 'a+') as f:
-                f.write(str(delays) +'\n')
+    # delays = []
+    # delay = 0
+    # splitedSize = 10
+    # a_splited = [network.delay[x:x+splitedSize] for x in range(0, len(network.delay), splitedSize)]
+    # #print('*****', len(a_splited))
+    # for i in a_splited:
+    #         delay = np.mean(i)
+    #         delays.append(delay)
+    # with open('average_delay.txt', 'a+') as f:
+    #             f.write(str(delays) +'\n')
 
 
     if cf.TRACE_COVERAGE:
@@ -210,9 +224,9 @@ def run_scenarios(kwargs):
 
     print('Remaining energies: ')
     print(remaining_energies)
-    print('Average energies: ')
-    print(average_energies)
-    return remaining_energies, average_energies
+    # print('Average energies: ')
+    # print(average_energies)
+    # return remaining_energies, average_energies
 
 
 def run_parameter_sweep():
@@ -230,12 +244,12 @@ def run_parameter_sweep():
             cf.BS_POS_Y = network_width/2
             cf.E_ELEC = elec_energy
 
-            remaining_energies, average_energies = run_scenarios()
-            totals[network_width][elec_energy] = remaining_energies
-            avgs[network_width][elec_energy] = average_energies
+            # remaining_energies, average_energies = run_scenarios()
+            # totals[network_width][elec_energy] = remaining_energies
+            # avgs[network_width][elec_energy] = average_energies
 
     print(totals)
-    print(avgs)
+    # print(avgs)
 
 
 if __name__ == '__main__':

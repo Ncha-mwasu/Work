@@ -44,37 +44,32 @@ class LEACH(RoutingProtocol):
         round, depending on a probability. Then it broadcasts this information
         to all network.
         Reference:
-          W. Heinzelman, A. Chandrakasan, and H. Balakrishnan, Energy-
-          efficient communication protocols for wireless sensor networks, In
-          Proceedings of the 33rd Annual Hawaii International Conference on
-          System Sciences (HICSS), Hawaii, USA, January 2000.
+            W. Heinzelman, A. Chandrakasan, and H. Balakrishnan, Energy-
+            efficient communication protocols for wireless sensor networks, In
+            Proceedings of the 33rd Annual Hawaii International Conference on
+            System Sciences (HICSS), Hawaii, USA, January 2000.
         """
         logging.info('LEACH: setup phase.')
         # decide which network are cluster heads
         for i, ntwk in enumerate(LEACH.networks): 
             sensor_nodes = ntwk.get_sensor_nodes()
-       # sensor_nodes = network.get_sensor_nodes()
-        # calculate the average distance to the BS
-        # check for number of clusters given to LEACH!
-            def transform(node): return calculate_distance(node, network.get_BS())
-            distances_to_BS = [transform(node) for node in sensor_nodes]
-            avg_distance_to_BS = np.average(distances_to_BS)
-            nb_clusters = calculate_opt_nb_clusters(len(sensor_nodes))
-            cf.NB_CLUSTERS = nb_clusters
-            prob_ch = float(cf.NB_CLUSTERS)/float(cf.NB_NODES)
+            
             heads = []
-            alive_nodes = network.get_alive_nodes()
-            logging.info('LEACH: deciding which nodes are cluster heads.')
-            idx = 0
-            while len(heads) != cf.NB_CLUSTERS:
-                node = alive_nodes[idx]
-                u_random = np.random.uniform(0, 1)
-            # node will be a cluster head
-                if u_random < prob_ch:
-                    node.next_hop = ntwk [-1].id
-                    heads.append(node)
+            energy_list = sorted(sensor_nodes, key=lambda node: node.energy_source.energy)
+            for node in sensor_nodes:
+                node.sq_dist = sum([calculate_distance(node, next_node)**2 for next_node in sensor_nodes if next_node != node])
+            distance_list = sorted(sensor_nodes, key=lambda node: node.sq_dist, reverse=True)
+            for node in sensor_nodes:
+                weight_energy = energy_list.index(node) + 1
+                weight_distance = distance_list.index(node) + 1
+                node.weight = weight_energy + weight_distance
 
-                idx = idx+1 if idx < len(alive_nodes)-1 else 0
+            optimal_list = sorted(sensor_nodes, key=lambda node: node.weight, reverse=True)
+            top_five = int(round(len(optimal_list)*0.05))
+            cluster_heads = optimal_list[:top_five]
+            for node in cluster_heads:
+                node.next_hop = ntwk [-1].id
+                heads.append(node)
 
         # ordinary network choose nearest cluster heads
             logging.info(
@@ -91,5 +86,4 @@ class LEACH(RoutingProtocol):
                 node.next_hop = nearest_head.id
                 controller = ntwk[-1]
                 controller.transmit(destination=network.get_BS())
-            ntwk.broadcast_next_hop()
-           
+            ntwk.broadcast_next_hop()             

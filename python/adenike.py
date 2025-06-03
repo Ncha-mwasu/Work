@@ -1,27 +1,49 @@
+
+# import required libraries
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import tensorflow as tf
+from matplotlib import rcParams
 
-X = ['10','20','30','40', '50', '60', '70', '80', '90', '100']
-Ygirls = [10,20,20,40]
-Zboys = [20,30,25,30]
-#MAE
-#y = [2.52E-05, 4.89E-05, 4.86E-05, 8.85E-05, 8.86E-05, 9.11E-05, 0.000122981, 9.97E-05, 0.000154072, 0.000132457]
-#y2= [3E-5, 2.99E-05, 5.90597E-05, 0.002795799, 0.000106892, 0.000121161, 0.000164899, 0.000164899, 0.000150181, 0.000193922]
+data = pd.read_csv('DC_data.csv')
+data = data.drop_duplicates(subset= ['entropy', 'deviation', 'MR'])
+with open('clean_data.txt', 'a') as f:
+                        f.write(str(data) +'\n')
+training_set,test_set = train_test_split(data,test_size=0.2, random_state=20)
+# prepare data for applying it to svm
+x_train = training_set.iloc[:,0:2].values  # data
+y_train = training_set.iloc[:,2].values  # target
+x_test = test_set.iloc[:,0:2].values  # data
+y_test = test_set.iloc[:,2].values  # target 
+#print(x_train,y_train)
 
-#pred_energy
-y = [0.006571725, 0.006718875, 0.004197375, 0.0032754, 0.0060102, 0.002053125, 0.001419375, 0.001430175, 0.00142545, 0.00144165]
-y2= [0.00364483125, 0.002958169, 0.00322005, 0.00279555, 0.003361181, 0.00279645, 0.002795119, 0.002937413, 0.003077738, 0.003361819]
+model = tf.keras.Sequential([
+    tf.keras.layers.Normalization(axis=-1, mean=None, variance=None, invert=False),
+    tf.keras.layers.Conv2D(16, 3, padding='same', activation='relu'),
+    tf.keras.layers.MaxPooling2D(),
+    tf.keras.layers.Dense(128, activation='softmax'),
+    tf.keras.layers.Dense(2)
+])
+model.compile(optimizer='adam',
+              loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+              metrics=['accuracy'])
+            
 
+history=model.fit(x_train, y_train, epochs=20)
 
-X_axis = np.arange(len(X))
-
-plt.bar(X_axis - 0.2, y, 0.4, color='r', label = 'Markov')
-plt.bar(X_axis + 0.2, y2, 0.4, color = 'g', label = 'ARIMA')
-
-plt.xticks(X_axis, X)
-plt.xlabel("Prediction Intervals")
-plt.ylabel("Average Energy (J)")
-#plt.title("Number of Students in each group")
+rcParams['figure.figsize'] = (18, 8)
+rcParams['axes.spines.top'] = False
+rcParams['axes.spines.right'] = False
+plt.plot(np.arange(1, 21), history.history['loss'], label='Loss')
+plt.plot(np.arange(1, 21), history.history['accuracy'], label='Accuracy')
+plt.title('Evaluation metrics', size=20)
+plt.xlabel('Epoch', size=14)
 plt.legend()
-plt.savefig('prediction_energy_plot.svg', dpi=300, bbox_inches='tight')
 plt.show()
+
+probability_model = tf.keras.Sequential([model, 
+                                         tf.keras.layers.Softmax()])
+predictions = probability_model.predict(x_test)
+np.argmax(predictions[0])
