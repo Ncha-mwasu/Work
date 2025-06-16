@@ -133,13 +133,13 @@ class Network(list):
     def update_flow_tables(self):
         self.controller.update_topology()
         for node in self.get_ordinary_nodes():
-            dst_ip = cf.CONTROLLER_IPS[cf.BSID]
+            dst_ip = cf.CONTROLLER_IPS[cf.BSID]  # Destination is BS
             next_hop_ip = cf.NODE_IPS.get(node.next_hop, cf.CONTROLLER_IPS.get(node.next_hop, cf.CONTROLLER_IPS[cf.BSID]))
-            node.add_flow_rule(dst_ip, next_hop_ip)
+            node.add_flow_rule(dst_ip, next_hop_ip)  # Ordinary to cluster head or BS
         for node in self.get_heads():
-            node.add_flow_rule(cf.CONTROLLER_IPS[cf.BSID], cf.CONTROLLER_IPS[cf.BSID])
+            node.add_flow_rule(cf.CONTROLLER_IPS[cf.BSID], cf.CONTROLLER_IPS[cf.BSID])  # Cluster head to BS
         for controller in self.get_controllers():
-            controller.add_flow_rule(cf.CONTROLLER_IPS[cf.BSID], cf.CONTROLLER_IPS[cf.BSID])
+            controller.add_flow_rule(cf.CONTROLLER_IPS[cf.BSID], cf.CONTROLLER_IPS[cf.BSID])  # Controllers to BS
 
 
     def logger(self):
@@ -223,6 +223,15 @@ class Network(list):
         self.deaths_this_round = 0
 
         for round_nb in range(0, cf.MAX_ROUNDS):
+            
+            self.round = round_nb  # Update round for plot title
+            self.routing_protocol.setup_phase(self, round_nb)
+            if cf.USE_FLOW_TABLE:
+                self.update_flow_tables()  # Populates flow_table
+            # Plot after setup_phase
+            if round_nb % 100 == 0:  # Plot every 100 rounds to reduce output
+                self.plot_network(filename=f"network_round_{round_nb}.png")
+            
             if round_nb == 0:
                 Network.make_round_energies_result_dir()
                 Network.open_round_energies_result_csv(scenario)
@@ -726,16 +735,16 @@ class Network(list):
         for node in self:
             if not node.alive or node.id == cf.BSID:
                 continue
-            if cf.USE_FLOW_TABLE:
+            if cf.USE_FLOW_TABLE and node.flow_table:
                 for dst_ip, next_hop_ip in node.flow_table.items():
                     next_hop_node = self.get_node_by_ip(next_hop_ip)
                     if next_hop_node and calculate_distance(node, next_hop_node) <= cf.TX_RANGE:
                         G.add_edge(node.id, next_hop_node.id)
-            else:
+            elif node.next_hop is not None:
                 next_hop_node = self._dict.get(node.next_hop)
                 if next_hop_node and calculate_distance(node, next_hop_node) <= cf.TX_RANGE:
                     G.add_edge(node.id, next_hop_node.id)
-        
+    
         # Plot the graph
         plt.figure(figsize=(10, 10))
         nx.draw(G, pos, with_labels=True, labels=labels, node_color=node_colors, 
